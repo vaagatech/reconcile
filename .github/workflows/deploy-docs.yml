@@ -1,0 +1,55 @@
+name: Deploy Docs to docs.vaagatech.com
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: true
+
+env:
+  AWS_S3_BUCKET: docs.vaagatech.com
+  AWS_CLOUDFRONT_DISTRIBUTION_ID: EA1T8BG6WSGP4
+  AWS_REGION: ap-south-1
+  PRODUCT_SLUG: snapline
+
+jobs:
+  deploy:
+    name: Sync Docs to docs.vaagatech.com/snapline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync docs to S3
+        run: |
+          aws s3 sync docs/ s3://${{ env.AWS_S3_BUCKET }}/${{ env.PRODUCT_SLUG }}/ \
+            --delete \
+            --exclude ".git/*" \
+            --exclude ".DS_Store" \
+            --cache-control "public,max-age=86400"
+
+          find docs -name "*.html" | while read -r html_file; do
+            rel_path="${html_file#docs/}"
+            aws s3 cp "${html_file}" "s3://${{ env.AWS_S3_BUCKET }}/${{ env.PRODUCT_SLUG }}/${rel_path}" \
+              --cache-control "public,max-age=0,must-revalidate" \
+              --content-type "text/html; charset=utf-8"
+          done
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ env.AWS_CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/${{ env.PRODUCT_SLUG }}/*"
